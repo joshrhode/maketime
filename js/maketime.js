@@ -1,18 +1,24 @@
 //constants
-var TICK_AVAILABLE = 'available';
-var TICK_USED = 'used';
-var TICK_EXPIRED = 'expired';
-var TICK_WIDTH = 10;
-var TICK_DIVIDER = 1 / TICK_WIDTH;
-var MAX_TICKS = 96;
+const TICK_AVAILABLE = 'available';
+const TICK_USED = 'used';
+const TICK_EXPIRED = 'expired';
+const TICK_WIDTH = 10;
+const TICK_DIVIDER = 1 / TICK_WIDTH;
+const MAX_TICKS = 96;
 
-var MODE_EDITING = 'editing';
-var MODE_DELETING = 'deleting';
-var MODE_NEW = 'new';
-var MODE_DEFAULT = '';
+const MODE_EDITING = 'editing';
+const MODE_DELETING = 'deleting';
+const MODE_NEW = 'new';
+const MODE_DEFAULT = '';
 
-var CAROUSEL_CENTER = 480;
-var CAROUSEL_EVENT_WIDTH = 240;
+const CAROUSEL_CENTER = 480;
+const CAROUSEL_EVENT_WIDTH = 240;
+
+const GOING_LEFT = -1;
+const GOING_RIGHT = 1;
+
+const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sept','Oct','Nov','Dec'];
 
 //events
 var events = [];
@@ -34,10 +40,10 @@ var carouselEventsObj;
 //timeline
 var timelineOffset;
 var timelineObj;
-var timelineTicks = new Array(MAX_TICKS);
+var timelineTicks = new Array(MAX_TICKS + 1);
 var timelineTickObjs;
 var timelineHourObjs;
-var hoverMouse = new Point(0,0);
+var timelineMouseX = 0;
 var tickHovered = 0;
 
 //creation
@@ -47,8 +53,6 @@ var createVisible = false;
 //date
 var today = new Date();
 var dateController = moment();
-var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sept','Oct','Nov','Dec'];
 
 var currentHour = today.getHours();
 var currentMinutes = today.getMinutes();
@@ -83,7 +87,7 @@ var TimelineTick = function(tickIndex, tickObj) {
 	var mins = ((tickIndex % 4) * 15);
 	this.time = formattedTime(hrs, mins);
 
-	if(tickIndex < currentTimeTick())
+	if(tickIndex < getTickByCurrentTime())
 		this.expire(true);
 
 }
@@ -93,6 +97,7 @@ TimelineTick.prototype.setState = function(state) {
 	this.obj.removeClass('used').addClass(state);
 }
 
+//expired means the tick is already in the past
 TimelineTick.prototype.expire = function(val) {
 	this.expired = val;
 	if(val == false)
@@ -103,7 +108,7 @@ TimelineTick.prototype.expire = function(val) {
 
 //setup and add all timeline ticks
 function populateTicks() {
-	for(var i=0; i<MAX_TICKS; ++i) {
+	for(var i=0; i <= MAX_TICKS; ++i) {
 		var tickObj = timelineTickObjs.eq(i);
 		timelineTicks[i] = new TimelineTick(i, tickObj);
 	}
@@ -140,27 +145,32 @@ function setTickState(state,a,b) {
 }
 
 //automatically update the state of all ticks
-function updateAllTicks() {
+function updateAllTickStates() {
 	timelineTickObjs.removeClass('used');
-	for(var r=0; r<timelineTicks.length; ++r)
+	for(var r=0; r < MAX_TICKS; ++r)
 		timelineTicks[r].setState(TICK_AVAILABLE);
 	for(var i=0; i<events.length; ++i)
 		setTickState(TICK_USED, events[i].startTick, events[i].endTick);
 }
 
 //get the nearest tick on the timeline based on current time
-function currentTimeTick() {
+function getTickByCurrentTime() {
 	updateTimeOfDay();
 	return (currentHour * 4) + Math.floor(currentMinutes / 15);
+}
+
+//providing the mouse's X position, get the nearest tick on the timeline
+function getTickByMouseX(number) {
+  	return Math.floor(number * TICK_DIVIDER);
+}
+
+function capTickValue(tick) {
+	return Math.min(Math.max(tick, 0), MAX_TICKS);
 }
 
 //get the actual (12:30 PM) time based on a provided tick number
 function getTimeByTick(tick) {
 	return timelineTicks[tick].time;
-}
-
-function getNearestTick(number){
-  	return Math.floor(number * TICK_DIVIDER);
 }
 
 /*================================================================
@@ -175,7 +185,7 @@ function formattedTime(hours,minutes) {
 	return (hours + ':' + minutes + ' ' + ampm);
 }
 
-//get a timestamp
+//get an accurant and present timestamp
 function getTimestamp() {
 	var ts = currentMonthLabel + " " + dateController.date() + " " + dateController.year();
     return ts;
@@ -199,7 +209,6 @@ function isTomorrow() {
 ================================================================*/
 
 function updateCalendar() {
-	
 	//refresh all labels
 	updateTimeLabel();
 	updateDateLabel();
@@ -209,18 +218,16 @@ function updateCalendar() {
 	//show or hide the time of day 
 	if(isToday()) {
 		$('.header .controls .time').removeClass('hide');
-		//TESTING ONLY -- ADDS EVENTS TO PAGE
+		//THIS IS FOR TESTING ONLY -- ADDS SAMPLE TO PAGE WHEN DATE IS TODAY
 		if(!events.length) {
-			//addSampleEvents();
+			addSampleEvents();
 			selectEvent(events[0]);
 		}
 	} else {
 		$('.header .controls .time').addClass('hide');
 		removeAllEvents(true);
 	}
-
-	console.log('Updated the calendar to ' + currentDayLabel);
-
+	console.log('Updated the calendar date to ' + currentDayLabel);
 }
 
 function updateTimeLabel() {
@@ -278,40 +285,33 @@ function gotoPrevDay() {
 	Interactivity handlers on the page
 ================================================================*/
 
-function setupResizeEvents() {
-	$(window).resize(function() {
-	 	timelineOffset = timelineObj.offset();
-	});
-	console.log('Resize handler set.');
-}
-
+//handles nearly all of the timeline interaction on the page.
 function setupMouseEvents() {
 
+	//get the position of the timeline on the page (used below)
 	timelineOffset = timelineObj.offset();
 
-	//mouse down = create a new event
+	//event handler for mouse down = start a new event!
 	timelineObj.mousedown(function() {
-		if(!activeResizing && createVisible) {
-			newEvent = addCalendarEvent('Untitled ' + sessionCreations, tickHovered, tickHovered + 1, MODE_NEW);
-			orientCarousel(newEvent);
-			selectEvent(newEvent);
-			newEvent.timelineObj.children('.scrub.right').mousedown();
-			sessionCreations++;
-		}
+		if(activeResizing || !createVisible) return; //ignore all of this if we're currently in a state of resizing
+		newEvent = addCalendarEvent('Untitled ' + sessionCreations, tickHovered, tickHovered + 1, MODE_NEW);
+		orientCarousel(newEvent);
+		selectEvent(newEvent);
+		newEvent.timelineObj.children('.scrub.right').mousedown();
+		sessionCreations++;
 	});
 
-	//resize an event, or move an event, depending on the state
+	//while the mouse is moving, you can either resize or slide an event (depending on what state you're in)
 	$(document).mousemove(function(e) {
         
-        hoverMouse.x = (e.pageX - timelineOffset.left);
-        hoverMouse.y = (e.pageY - timelineOffset.top - 100);
-        tickHovered = getNearestTick(hoverMouse.x);
-
-        //resize event when scrubbed
+        timelineMouseX = (e.pageX - timelineOffset.left);
+        tickHovered = capTickValue(getTickByMouseX(timelineMouseX));
+        
+        //resize the event when the edges are being pulled left or right
         if(activeResizing && (tickHovered <= activeEvent.endEdge) && (tickHovered > activeEvent.startEdge)) {
         	activeEvent.resize(tickHovered);	
     		activeEvent.updatePageObjects();
-    	//resize event when dragged
+    	//resize event when dragged around the timeline
         } else if(activeDragging) {
         	var dragDelta = tickHovered - dragClickedTick;
         	var dragEdge = MAX_TICKS - activeEvent.tickWidth;
@@ -323,13 +323,12 @@ function setupMouseEvents() {
 	        	activeEvent.updatePageObjects();
 	        } else {
 	        	activeEvent.ghost(true);
-	        	activeEvent.timelineObj.css({left:hoverMouse.x - dragClickOffset.x});
+	        	activeEvent.timelineObj.css({left:timelineMouseX - dragClickOffset.x});
 	        }
         }
-
 	});
 
-	//show or hide the create widget on the timeline
+	//this shows or hides the Create 'cursor' on the timeline
 	$(timelineObj).mousemove(function(e) {
 		//if the user isn't resizing or dragging, and the tick is available...
 		if(!activeResizing && !activeDragging && areTicksAvailable(tickHovered)) {
@@ -355,22 +354,23 @@ function setupMouseEvents() {
 
 }
 
+//re-set the timeline's offset whenever the window resizes
+function setupResizeEvents() {
+	$(window).resize(function() {
+	 	timelineOffset = timelineObj.offset();
+	});
+	console.log('Window resize handler set.');
+}
+
 /*================================================================
 	Events, create/delete/move/resize
 ================================================================*/
-
-function addEventsByDate() {
-	addCalendarEvent('Coffee and sketching', 36, 39, MODE_DEFAULT);
-	addCalendarEvent('New dashboard designs', 40, 50, MODE_DEFAULT);
-	addCalendarEvent('Brand styleguide updates', 55, 65, MODE_DEFAULT);
-	addCalendarEvent('Iconography', 66, 72, MODE_DEFAULT);
-}
 
 function addCalendarEvent(title, startTick, endTick, setState) {
 	var newEvent = new CalendarEvent(title, startTick, endTick, setState);
 	events.push(newEvent);
 	emptyCalendar(false); //show the 'clear' button in the header
-	console.log('New event started at tick [' + startTick + ' - ' + getTimeByTick(startTick) + ']');
+	console.log('New event started at tick ' + startTick + ' [' + getTimeByTick(startTick) + ']');
 	return newEvent;
 }
 
@@ -423,7 +423,7 @@ function startResizing() {
 //stop resizing an event
 function stopResizing() {
 	activeResizing = false;
-	updateAllTicks();
+	updateAllTickStates();
 	if(activeEvent.state == MODE_NEW) {
 		activeEvent.setState(MODE_EDITING);
 	}
@@ -446,7 +446,7 @@ function stopDragging() {
 		activeEvent.timelineObj.css({left: activeEvent.getLeftPixel()});
 		activeEvent.ghost(false);
 	}
-	updateAllTicks();
+	updateAllTickStates();
 }
 
 //select an event and make it active
@@ -522,14 +522,14 @@ function findNearestEvent(compareTick) {
 
 var CalendarEvent = function(title,startTick,endTick,startState) {
 	this.title = title;
-	this.pixelWidth = 0;
-	this.tickWidth = 0;
-	this.setInitialTime(startTick,endTick);
-	this.ghosted = false;
-	this.needsReorder = false;
-	this.deleting = false;
-	this.complete = false;
-	this.firstEdit = (startState == MODE_NEW);
+	this.pixelWidth = 0; //how big the block is in the browser
+	this.tickWidth = 0; //how many 'ticks' it occupies
+	this.setInitialTime(startTick,endTick); //set starting start/end
+	this.ghosted = false; //when the unit is free-floating off the timeline
+	this.needsReorder = false; //flag that is checked when block re-enters timeline ("does carousel need to be re-ordered?"")
+	this.deleting = false; //event is being deleted
+	this.complete = false; //is event completed or not (did it occur)
+	this.firstEdit = (startState == MODE_NEW); 
 	this.timelineID = Math.random().toString(36).substring(7);
 	this.carouselID = Math.random().toString(36).substring(7);
 	this.timelineObj = null;
@@ -544,7 +544,6 @@ var CalendarEvent = function(title,startTick,endTick,startState) {
 	this.addToTimeline();
 	this.addToCarousel();
 	this.updateTitle(title);
-	//orientCarousel(this);
 }
 
 CalendarEvent.prototype.setInitialTime = function(startTick,endTick) {
@@ -560,23 +559,17 @@ CalendarEvent.prototype.setInitialTime = function(startTick,endTick) {
 
 }
 
-CalendarEvent.prototype.revealAll = function() {
-	console.log(this.title);
-	console.log('' + this.startEdge + ' <' + this.startTick + ' ' + this.endTick + '> ' + this.endEdge + '');
-	console.log('---------------------');
-}
-
 CalendarEvent.prototype.setBoundaries = function() {
-	//find rightmost edge
+	//find the rightmost edge
 	var i = this.endTick;
 	var setCapEnd = null; 
-	while (i < timelineTicks.length && setCapEnd == null) {
+	while (i < MAX_TICKS && setCapEnd == null) {
 		if(timelineTicks[i].state != TICK_AVAILABLE) setCapEnd = i;
 		i++;
     }
-    if(setCapEnd == null) setCapEnd = timelineTicks.length;
+    if(setCapEnd == null) setCapEnd = MAX_TICKS;
 
-    //find leftmost edge
+    //find the leftmost edge
     i = this.startTick - 1;
     var setCapStart = null;
     while (i >= 0 && setCapStart == null) {
@@ -610,9 +603,9 @@ CalendarEvent.prototype.ghost = function(val) {
 
 CalendarEvent.prototype.resize = function(newTime) {
 
-	if(this.resizeDirection == -1 && newTime < this.endTick) {
+	if(this.resizeDirection == GOING_LEFT && newTime < this.endTick) {
 		this.startTick = newTime;
-	} else if(this.resizeDirection == 1 && newTime > this.startTick) {
+	} else if(this.resizeDirection == GOING_RIGHT && newTime > this.startTick) {
 		this.endTick = newTime;
 	}
 
@@ -716,9 +709,9 @@ CalendarEvent.prototype.addToTimeline = function() {
 		e.stopPropagation();
 		thisEvent.setBoundaries();
 		if($(e.target).hasClass('right')) {
-			thisEvent.resizeDirection = 1;
+			thisEvent.resizeDirection = GOING_RIGHT;
 		} else {
-			thisEvent.resizeDirection = -1;
+			thisEvent.resizeDirection = GOING_LEFT;
 		}
 		startResizing();
 		$(document).one('mouseup', stopResizing);
@@ -749,17 +742,17 @@ CalendarEvent.prototype.addToCarousel = function() {
 					'<div class="actions"><div class="delete-confirm">Do you really want to delete?</div><input class="input" value="Untitled"><i class="cancel material-icons">clear</i><i class="accept material-icons">done</i></div>' +
 				'</div>';
 	
-	//if there is a nearest neighbor event..
-	if(prevObj != null) {
-		//if the nearest neighor occurs earlier, then add the new event afterwards on the carousel
-		if(prevObj.startTick < this.startTick) {
+	if(prevObj != null) { 
+		//if there is a nearest neighbor event on the calendar..
+		if(prevObj.startTick < this.startTick) { 
+			//if the nearest neighor occurs earlier, then add the new event afterwards on the carousel
 			$(prevObj.carouselObj).after(html);
-		//otherwise, add the event before the nearest neighbor on the carousel
-		} else {
+		} else { 
+			//otherwise, add the event before the nearest neighbor on the carousel
 			$(prevObj.carouselObj).before(html);
 		}
-	//if nothing else, add the event to the end of the carousel
-	} else {
+	} else { 
+		//if nothing else, add the event to the end of the carousel
 		$('.carousel .events').append(html);
 	}
 	
@@ -780,16 +773,16 @@ CalendarEvent.prototype.addToCarousel = function() {
 		
 		var btn = $(this);
 
-		//if user enters editing mode
 		if(btn.hasClass('edit')) {
+			//if user enters editing mode
 			thisEvent.select();
 			thisEvent.setState(MODE_EDITING);
-		//if user attempts to delete the event
 		} else if(btn.hasClass('delete')) {
+			//if user attempts to delete the event
 			thisEvent.select();
 			thisEvent.setState(MODE_DELETING);
-		//if user hits the cancel action
 		} else if(btn.hasClass('cancel')) {
+			//if user hits the cancel action
 			if(thisEvent.state == MODE_DELETING) {
 				thisEvent.setState(MODE_DEFAULT);
 			} else {
@@ -800,8 +793,8 @@ CalendarEvent.prototype.addToCarousel = function() {
 					thisEvent.revertInput();
 				}
 			}
-		//if user hits the accept action
 		} else if(btn.hasClass('accept')) {
+			//if user hits the accept action
 			if(thisEvent.state == MODE_DELETING) {
 				removeCalendarEvent(thisEvent);
 			} else {
@@ -809,9 +802,10 @@ CalendarEvent.prototype.addToCarousel = function() {
 				thisEvent.updateTitle();
 			}
 		}
-		//if event was just made, clear 'firstEdit' state
-		if(thisEvent.firstEdit == true)
+		if(thisEvent.firstEdit == true) {
+			//if event was just made, clear 'firstEdit' state
 			thisEvent.firstEdit = false;
+		}
 	});
 	//select the new event on the timeline
 	this.carouselObj.click(function() {
@@ -870,6 +864,15 @@ CalendarEvent.prototype.reorderCarousel = function() {
 	Start
 ================================================================*/
 
+//testing purposes only!
+function addSampleEvents() {
+	addCalendarEvent('Coffee and sketching', 36, 39, MODE_DEFAULT);
+	addCalendarEvent('New dashboard designs', 40, 50, MODE_DEFAULT);
+	addCalendarEvent('Brand styleguide updates', 55, 65, MODE_DEFAULT);
+	addCalendarEvent('Iconography', 66, 72, MODE_DEFAULT);
+}
+
+
 $(document).ready(function () {
 
 	//link core page objects
@@ -894,10 +897,15 @@ $(document).ready(function () {
 	setupMouseEvents();
 	//update page header details
 	updateCalendar();
+	
+	//if you're not testing with sample events, this should be enabled
+	//show the empty state "No Sessions" label
+	//emptyCalendar(true);
+
 	//update the clock in realtime
 	clockTimer = setTimeout(updateTimeLabel, 1000);
 	
-	updateAllTicks();
+	updateAllTickStates();
 
 });
 
